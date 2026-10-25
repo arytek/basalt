@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <mutex>
 #include <string>
 #include <thread>
 #if defined(_WIN32)
@@ -257,7 +258,21 @@ std::atomic<bool> g_guard_on{false};
 std::atomic<bool> g_guard_low{false};
 std::atomic<uint64_t> g_guard_avail{0};
 std::atomic<uint64_t> g_guard_floor{0};
+constexpr uint64_t kReclaimLead = 1ull << 30;   // how far above the floor the guard gives the view back
+std::mutex g_reclaim_mu;                         // held while the view is given back, so a withdrawn one is untouched
+const void* g_reclaim_base = nullptr;
+uint64_t g_reclaim_bytes = 0;
 }  // namespace
+
+void ram_guard_reclaim_view(const void* base, uint64_t bytes) {
+#if defined(_WIN32)
+    std::lock_guard<std::mutex> lock(g_reclaim_mu);
+    g_reclaim_base = bytes > 0 ? base : nullptr;
+    g_reclaim_bytes = g_reclaim_base != nullptr ? bytes : 0;
+#else
+    (void) base, (void) bytes;   // MemAvailable already counts a view's pages
+#endif
+}
 
 void start_ram_guard(uint64_t floor_bytes) {
     g_guard_floor = floor_bytes;
@@ -265,7 +280,15 @@ void start_ram_guard(uint64_t floor_bytes) {
     std::thread([] {
         bool was_low = false;
         for (;;) {
-            const uint64_t avail = available_memory(), floor = g_guard_floor.load();
+            uint64_t avail = available_memory();
+            const uint64_t floor = g_guard_floor.load();
+            if (ram_below_floor(avail, floor + kReclaimLead)) {
+                std::lock_guard<std::mutex> lock(g_reclaim_mu);
+                if (g_reclaim_base != nullptr) {
+                    (void) drop_mapped_view(g_reclaim_base, g_reclaim_bytes, 0, g_reclaim_bytes);
+                    avail = available_memory();
+                }
+            }
             const bool low = ram_below_floor(avail, floor);
             g_guard_avail = avail;
             g_guard_low = low;
