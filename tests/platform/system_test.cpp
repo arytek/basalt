@@ -49,12 +49,13 @@ int main() {
     check(keep_full_speed(), "keep_full_speed is accepted");
     check(keep_full_speed(), "and accepted again");
 #if defined(_WIN32)
+    // older Windows builds accept the state but cannot report it back
     PROCESS_POWER_THROTTLING_STATE pt{};
     pt.Version = PROCESS_POWER_THROTTLING_CURRENT_VERSION;
-    check(GetProcessInformation(GetCurrentProcess(), ProcessPowerThrottling, &pt, sizeof pt) != 0 &&
-              (pt.ControlMask & PROCESS_POWER_THROTTLING_EXECUTION_SPEED) != 0 &&
-              (pt.StateMask & PROCESS_POWER_THROTTLING_EXECUTION_SPEED) == 0,
-          "and the OS reports execution speed as never lowered");
+    if (GetProcessInformation(GetCurrentProcess(), ProcessPowerThrottling, &pt, sizeof pt) != 0)
+        check((pt.ControlMask & PROCESS_POWER_THROTTLING_EXECUTION_SPEED) != 0 &&
+                  (pt.StateMask & PROCESS_POWER_THROTTLING_EXECUTION_SPEED) == 0,
+              "and the OS reports execution speed as never lowered");
 #endif
 
     (void) gpu_peer_access();
